@@ -1,0 +1,17 @@
+# Dependencies
+node_modules/
+
+# Environment files. The .env.example template must stay committable.
+.env
+.env.*
+!.env.example
+
+# SQLite database files and their sidecar files (see root .gitignore note on -wal/-shm)
+prisma/*.db
+prisma/*.db-journal
+prisma/*.db-wal
+prisma/*.db-shm
+
+# Logs and coverage
+*.log
+coverage/

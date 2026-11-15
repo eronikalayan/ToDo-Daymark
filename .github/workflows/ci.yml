@@ -1,0 +1,120 @@
+# Daymark CI — REF-003 (audit finding BE-026)
+#
+# PLATFORM ASSUMPTION
+# -------------------
+# The CI platform could not be determined from the repository: there is no Git
+# remote, no pre-existing CI configuration, and none was supplied. GitHub Actions
+# is used because the refactoring plan names `.github/workflows/ci.yml`. If the
+# project is hosted elsewhere (GitLab, Bitbucket, Azure DevOps, Jenkins), this
+# file is inert and the same command sequence should be ported to that platform.
+#
+# This workflow does nothing until a Git repository exists (REF-001, pending
+# approval) and a remote is configured. It is committed now so the verification
+# sequence is reviewable.
+#
+# Every command below was executed against a simulated fresh clone on the pinned
+# Node version before being written here.
+
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Lint, test and audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    defaults:
+      run:
+        working-directory: backend
+
+    env:
+      # `prisma.config.ts` resolves DATABASE_URL eagerly, so `prisma generate`
+      # fails with PrismaConfigEnvError when it is unset — verified. This points
+      # at a throwaway file inside the runner; no real database is involved.
+      # `npm test` overrides it with its own isolated prisma/test.db regardless.
+      DATABASE_URL: 'file:./prisma/ci.db'
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      # Uses .nvmrc as the single source of truth for the Node version, so CI and
+      # developer machines cannot drift apart (REF-004).
+      - name: Set up Node from .nvmrc
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      # `npm ci` installs strictly from package-lock.json and fails if the lockfile
+      # and package.json disagree — this is the reproducibility guarantee.
+      # better-sqlite3 has no prebuild for every platform and compiles from source;
+      # ubuntu-latest already ships the required toolchain (make, g++, python3).
+      - name: Install dependencies (reproducible, from lockfile)
+        run: npm ci
+
+      # Required before anything imports @prisma/client. Without it the test suite
+      # fails with "Cannot find module '.prisma/client/default'" — verified on a
+      # fresh clone. `npm ci` does not run this automatically, and it is deliberately
+      # NOT wired into a `prepare` script, because `prisma` is a devDependency and a
+      # production `npm ci --omit=dev` would then fail.
+      - name: Generate the Prisma client
+        run: npm run db:generate
+
+      - name: Lint
+        run: npm run lint
+
+      # Runs the STABLE suite via scripts/test.js, which forces NODE_ENV=test and
+      # redirects DATABASE_URL to an isolated prisma/test.db. It never touches a
+      # development or production database. Do not replace this with a direct
+      # `node --test` invocation: that bypasses the override and binds the
+      # development database — the REF-030 guard now refuses such a run outright.
+      #
+      # `npm run test:defects` is deliberately NOT run here. That suite reproduces
+      # audit findings BE-001 to BE-004 and is expected to fail until REF-010 to
+      # REF-014 land; gating CI on it would leave the pipeline permanently red.
+      - name: Test (stable suite)
+        run: npm test
+
+      # Production dependency surface must be clean: any vulnerability fails the build.
+      - name: Audit production dependencies
+        run: npm audit --omit=dev
+
+      # Full tree including dev tooling. Scoped to high/critical so that a moderate
+      # advisory in a linter's transitive dependency does not block delivery, while
+      # anything genuinely serious still does. Reported, never auto-fixed.
+      - name: Audit all dependencies (high and critical only)
+        run: npm audit --audit-level=high
+
+      # Fails if the checked-in migration history no longer produces the schema in
+      # schema.prisma. Read-only: it creates no artifacts and touches no real
+      # database. Exit code 2 means drift, 0 means clean — verified with a negative
+      # control that introduced drift on purpose.
+      - name: Check migrations against the Prisma schema
+        run: npx prisma migrate diff --from-migrations prisma/migrations --to-schema prisma/schema.prisma --exit-code
+
+      # Guard against the class of mistake REF-002 exists to prevent.
+      - name: Assert no secret or database file is tracked
+        working-directory: .
+        run: |
+          leaked="$(git ls-files | grep -E '(^|/)\.env$|(^|/)\.env\.[^/]*$|\.db$|\.db-journal$|\.db-wal$|\.db-shm$|(^|/)node_modules/' | grep -v '\.env\.example$' || true)"
+          if [ -n "$leaked" ]; then
+            echo "Tracked files that must never be committed:" >&2
+            echo "$leaked" >&2
+            exit 1
+          fi
+          echo "No secret, database or dependency files are tracked."

@@ -1,0 +1,129 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+model User {
+  id           String   @id @default(uuid())
+  name         String
+  email        String   @unique
+  emailVerifiedAt DateTime? @map("email_verified_at")
+  passwordHash String   @map("password_hash")
+  tasks        Task[]        @relation("TaskOwner")
+  createdTasks Task[]        @relation("TaskCreator")
+  sentFriendRequests Friendship[] @relation("FriendRequester")
+  receivedFriendRequests Friendship[] @relation("FriendAddressee")
+  sentMessages ChatMessage[] @relation("MessageSender")
+  receivedMessages ChatMessage[] @relation("MessageRecipient")
+  verificationTokens EmailVerificationToken[]
+  sessions     Session[]
+  passwordResetTokens PasswordResetToken[]
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  @@map("users")
+}
+
+model EmailVerificationToken {
+  id        String   @id
+  userId    String   @map("user_id")
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime @map("expires_at")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([userId, expiresAt])
+  @@map("email_verification_tokens")
+}
+
+model Session {
+  id        String   @id
+  userId    String   @map("user_id")
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime @map("expires_at")
+  createdAt DateTime @default(now()) @map("created_at")
+  revokedAt DateTime? @map("revoked_at")
+
+  @@index([userId, expiresAt])
+  @@map("sessions")
+}
+
+model PasswordResetToken {
+  id        String   @id
+  userId    String   @map("user_id")
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime @map("expires_at")
+  usedAt    DateTime? @map("used_at")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([userId, expiresAt])
+  @@map("password_reset_tokens")
+}
+
+model Task {
+  id          String    @id @default(uuid())
+  userId      String    @map("user_id")
+  user        User      @relation("TaskOwner", fields: [userId], references: [id], onDelete: Cascade)
+  // Provenance, not ownership: who SENT this task. Ownership is `userId`.
+  // Nullable with onDelete: SetNull so that a creator deleting their own account
+  // forgets the sender but never removes a task belonging to its recipient (BE-001).
+  createdById String?   @map("created_by_id")
+  createdBy   User?     @relation("TaskCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  messages    ChatMessage[]
+  title       String
+  description String?
+  dueDate     DateTime? @map("due_date")
+  priority    String    @default("medium")
+  priorityOrder Int     @default(2) @map("priority_order")
+  sortOrder     Int     @default(0) @map("sort_order")
+  completed   Boolean   @default(false)
+  completedAt DateTime? @map("completed_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+
+  // Common list filters use these indexes. Composite indexes also keep per-user queries fast.
+  @@index([userId])
+  @@index([completed])
+  @@index([dueDate])
+  @@index([userId, completed])
+  @@index([userId, dueDate])
+  @@index([userId, priorityOrder])
+  @@index([userId, sortOrder])
+  @@index([createdById])
+  @@map("tasks")
+}
+
+model Friendship {
+  id          String   @id @default(uuid())
+  requesterId String   @map("requester_id")
+  addresseeId String   @map("addressee_id")
+  requester   User     @relation("FriendRequester", fields: [requesterId], references: [id], onDelete: Cascade)
+  addressee   User     @relation("FriendAddressee", fields: [addresseeId], references: [id], onDelete: Cascade)
+  status      String   @default("pending")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  @@unique([requesterId, addresseeId])
+  @@index([addresseeId, status])
+  @@index([requesterId, status])
+  @@map("friendships")
+}
+
+model ChatMessage {
+  id          String   @id @default(uuid())
+  senderId    String   @map("sender_id")
+  recipientId String   @map("recipient_id")
+  taskId      String?  @map("task_id")
+  sender      User     @relation("MessageSender", fields: [senderId], references: [id], onDelete: Cascade)
+  recipient   User     @relation("MessageRecipient", fields: [recipientId], references: [id], onDelete: Cascade)
+  task        Task?    @relation(fields: [taskId], references: [id], onDelete: SetNull)
+  body        String
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@index([senderId, recipientId, createdAt])
+  @@index([recipientId, senderId, createdAt])
+  @@index([taskId])
+  @@map("chat_messages")
+}

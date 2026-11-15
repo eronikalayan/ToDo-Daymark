@@ -1,0 +1,28 @@
+# Dependencies
+node_modules/
+backend/node_modules/
+
+# Environment files. Real secrets must never be committed; the *.example
+# templates must stay committable, hence the negations below.
+.env
+.env.*
+!.env.example
+backend/.env
+backend/.env.*
+!backend/.env.example
+
+# SQLite database files and their sidecar files.
+# journal_mode is currently "delete", but -wal/-shm are listed so a future
+# switch to WAL (by Prisma, the adapter, or a config change) cannot leak data.
+backend/prisma/*.db
+backend/prisma/*.db-journal
+backend/prisma/*.db-wal
+backend/prisma/*.db-shm
+
+# Logs, coverage and OS/editor noise
+*.log
+coverage/
+.DS_Store
+
+# Local pre-change backups (Stage 2+). Never committed, never uploaded.
+.backups/

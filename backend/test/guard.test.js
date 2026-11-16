@@ -12,6 +12,7 @@ const assert = require('node:assert/strict');
 const { execFileSync, spawnSync } = require('node:child_process');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 
 const BACKEND_ROOT = path.resolve(__dirname, '..');
@@ -148,11 +149,26 @@ describe('REF-030 test database guard', () => {
     test('without an explicit DATABASE_URL the application resolves to the development database', () => {
       // Configuration resolution only — this opens no connection. It demonstrates
       // exactly what an unguarded editor-launched test file would have bound to.
-      const resolved = execFileSync(
+      // Use an isolated backend layout, never the developer's untracked .env.
+      // The copied configuration still resolves ../../.env exactly as in the app.
+      const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'daymark-env-'));
+      let resolved;
+      try {
+        fs.mkdirSync(path.join(fixtureRoot, 'src', 'config'), { recursive: true });
+        fs.copyFileSync(path.join(BACKEND_ROOT, 'src', 'config', 'env.js'), path.join(fixtureRoot, 'src', 'config', 'env.js'));
+        fs.symlinkSync(path.join(BACKEND_ROOT, 'node_modules'), path.join(fixtureRoot, 'node_modules'), 'dir');
+        fs.writeFileSync(path.join(fixtureRoot, '.env'), [
+          'DATABASE_URL=file:./prisma/dev.db',
+          'JWT_SECRET=fixture-only-secret-not-used-by-the-application'
+        ].join('\n'));
+        resolved = execFileSync(
         process.execPath,
         ['-e', "const {env}=require('./src/config/env'); console.log(env.NODE_ENV+'|'+env.DATABASE_URL);"],
-        { cwd: BACKEND_ROOT, env: { PATH: process.env.PATH, HOME: process.env.HOME }, encoding: 'utf8' }
+        { cwd: fixtureRoot, env: { PATH: process.env.PATH, HOME: process.env.HOME }, encoding: 'utf8' }
       ).trim();
+      } finally {
+        fs.rmSync(fixtureRoot, { recursive: true, force: true });
+      }
 
       const [nodeEnv, databaseUrl] = resolved.split('|');
       assert.equal(nodeEnv, 'development', 'an unguarded run falls back to the development environment');
